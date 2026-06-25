@@ -2,7 +2,7 @@ name: "Dispatch DroidSpaces Recovery Hack"
 
 on:
   push:
-    branches: [ "dispatch-recovery" ]
+    branches: [ "droidspaces-recovery" ]
 
 jobs:
   trigger:
