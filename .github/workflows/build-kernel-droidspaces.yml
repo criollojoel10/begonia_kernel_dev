@@ -54,12 +54,12 @@ jobs:
       - name: Verify toolchain
         run: |
           aarch64-linux-gnu-gcc --version
-          echo "=== CC test ==="
+          echo "CC test:"
           echo 'int main(){return 0;}' | aarch64-linux-gnu-gcc -x c - -o /dev/null && echo "OK" || echo "FAIL"
 
       - name: Configure kernel
         run: |
-          make ${{ env.DEFCONFIG }}
+          make $DEFCONFIG
           echo "=== DroidSpaces config check ==="
           grep -E "TMPFS_POSIX_ACL|TMPFS_XATTR|NAMESPACES|PID_NS|SECCOMP|CGROUPS|DEVTMPFS|OVERLAY_FS|NET_NS|VETH|BRIDGE|NF_NAT" .config | grep -v "^#" | head -20
 
@@ -69,22 +69,14 @@ jobs:
         env:
           LOCALVERSION: -droidspaces-v1
 
-      - name: Build boot.img (Android boot image)
-        run: |
-          # Build boot image with AnyKernel3 or manual
-          mkdir -p output
-          cp arch/arm64/boot/Image output/Image
-          cp arch/arm64/boot/dts/mediatek/*begonia*.dtb output/ 2>/dev/null || true
-          ls -lh output/
-
       - name: Package artifacts
         run: |
-          mkdir -p artifact
-          cp output/Image artifact/
-          find output/ -name "*.dtb" -exec cp {} artifact/ \;
-          cp .config artifact/build.config
-          cp build.log artifact/ 2>/dev/null || true
-          cd artifact && tar -czf ../begonia-droidspaces-kernel.tar.gz *
+          mkdir -p output
+          cp arch/arm64/boot/Image output/
+          find arch/arm64/boot/dts/ -name "*.dtb" -exec cp {} output/ \;
+          cp .config output/build.config
+          cp build.log output/ 2>/dev/null || true
+          cd output && tar -czf ../begonia-droidspaces-kernel.tar.gz *
 
       - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
@@ -95,23 +87,14 @@ jobs:
 
       - name: Build summary
         run: |
-          echo "## ✅ DroidSpaces Kernel Build Complete" >> \$GITHUB_STEP_SUMMARY
-          echo "" >> \$GITHUB_STEP_SUMMARY
-          echo "| Item | Value |" >> \$GITHUB_STEP_SUMMARY
-          echo "|---|---|" >> \$GITHUB_STEP_SUMMARY
-          echo "| **Device** | Xiaomi Redmi Note 8 Pro (begonia) |" >> \$GITHUB_STEP_SUMMARY
-          echo "| **Kernel** | ${{ env.KERNEL_VERSION }} |" >> \$GITHUB_STEP_SUMMARY
-          echo "| **Defconfig** | ${{ env.DEFCONFIG }} |" >> \$GITHUB_STEP_SUMMARY
-          echo "| **Branch** | ${{ inputs.branch || 'droidspaces' }} |" >> \$GITHUB_STEP_SUMMARY
-          echo "" >> \$GITHUB_STEP_SUMMARY
-          echo "### Artifacts" >> \$GITHUB_STEP_SUMMARY
-          echo "- \`Image\` - Kernel image (uncompressed)" >> \$GITHUB_STEP_SUMMARY
-          echo "- \`*.dtb\` - Device tree blobs" >> \$GITHUB_STEP_SUMMARY
-          echo "- \`build.config\` - Build configuration used" >> \$GITHUB_STEP_SUMMARY
-          echo "" >> \$GITHUB_STEP_SUMMARY
-          echo "### Flashing" >> \$GITHUB_STEP_SUMMARY
-          echo '```bash' >> \$GITHUB_STEP_SUMMARY
-          echo '# Flash via fastboot' >> \$GITHUB_STEP_SUMMARY
-          echo 'fastboot flash boot boot.img' >> \$GITHUB_STEP_SUMMARY
-          echo 'fastboot reboot' >> \$GITHUB_STEP_SUMMARY
-          echo '```' >> \$GITHUB_STEP_SUMMARY
+          echo "## Build Complete"
+          echo ""
+          echo "Device: Xiaomi Redmi Note 8 Pro (begonia)"
+          echo "Kernel: $KERNEL_VERSION"
+          echo "Defconfig: $DEFCONFIG"
+          echo "Branch: ${{ inputs.branch || 'droidspaces' }}"
+          echo ""
+          echo "### Artifacts"
+          echo "- Image - Kernel image"
+          echo "- *.dtb - Device tree blobs"
+          echo "- build.config - Build configuration"
