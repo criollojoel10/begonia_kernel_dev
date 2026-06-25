@@ -1,100 +1,181 @@
-name: 🔧 Build DroidSpaces Kernel (begonia)
+name: "🔧 DroidSpaces Kernel — begonia (MTK)"
 
 on:
   workflow_dispatch:
     inputs:
+      kernel_branch:
+        description: "Branch del kernel"
+        required: false
+        default: "droidspaces"
       defconfig:
-        description: 'Defconfig target'
+        description: "Defconfig"
         required: false
-        default: 'begonia_user_defconfig'
-      branch:
-        description: 'Branch to build'
+        default: "begonia_user_defconfig"
+      tag:
+        description: "Tag para el artifact"
         required: false
-        default: 'droidspaces'
-      kernel_version:
-        description: 'Kernel version label'
-        required: false
-        default: '4.14.356-droidspaces'
+        default: "Droidspaces-v1"
 
 env:
-  DEFCONFIG: begonia_user_defconfig
   ARCH: arm64
-  CROSS_COMPILE: aarch64-linux-gnu-
-  CC: gcc
-  KERNEL_VERSION: 4.14.356-droidspaces
+  SUBARCH: arm64
+  OUT_DIR: out
+  DEVICE: begonia
 
 jobs:
   build-kernel:
-    name: Build kernel for begonia
+    name: "Build DroidSpaces kernel — begonia"
     runs-on: ubuntu-22.04
-    
+    timeout-minutes: 120
+
     steps:
-      - name: Checkout source
+      - name: "Checkout kernel source"
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch || 'droidspaces' }}
+          ref: ${{ inputs.kernel_branch || 'droidspaces' }}
           fetch-depth: 1
+          path: kernel
 
-      - name: Install toolchain and dependencies
+      - name: "Free disk space"
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h /
+
+      - name: "Install build dependencies"
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            gcc-aarch64-linux-gnu \
-            binutils-aarch64-linux-gnu \
-            libc6-dev-arm64-cross \
-            device-tree-compiler \
-            lz4 xz-utils zstd \
-            cpio \
-            bc bison flex \
-            libssl-dev \
-            python3 \
-            --no-install-recommends
-          sudo apt-get clean
+          sudo apt-get install -y -qq --no-install-recommends \
+            wget xz-utils zstd lz4 cpio bc bison flex libssl-dev libelf-dev \
+            libncurses6 ccache python3 python-is-python3 \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi device-tree-compiler
 
-      - name: Verify toolchain
+      - name: "Download Clang toolchain"
         run: |
-          aarch64-linux-gnu-gcc --version
-          echo "CC test:"
-          echo 'int main(){return 0;}' | aarch64-linux-gnu-gcc -x c - -o /dev/null && echo "OK" || echo "FAIL"
+          mkdir -p clang
+          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r547379.tar.gz -O clang.tar.gz
+          tar -xf clang.tar.gz -C clang
+          ls clang/bin/clang clang/bin/ld.lld
+          clang/bin/clang --version | head -3
 
-      - name: Configure kernel
+      - name: "Configure kernel for DroidSpaces"
+        working-directory: kernel
         run: |
-          make $DEFCONFIG
+          export PATH="${GITHUB_WORKSPACE}/clang/bin:${PATH}"
+          mkdir -p "${OUT_DIR}"
+
+          # Generate defconfig
+          make O="${OUT_DIR}" ARCH=arm64 \
+            CC="ccache clang" LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 \
+            ${{ inputs.defconfig || 'begonia_user_defconfig' }}
+
+          # Enable DroidSpaces configs
+          CONFIG="${OUT_DIR}/.config"
+          scripts/config --file "${CONFIG}" --enable NAMESPACES PID_NS UTS_NS IPC_NS NET_NS
+          scripts/config --file "${CONFIG}" --enable SECCOMP SECCOMP_FILTER
+          scripts/config --file "${CONFIG}" --enable CGROUPS CGROUP_DEVICE CGROUP_PIDS MEMCG
+          scripts/config --file "${CONFIG}" --enable DEVTMPFS OVERLAY_FS TMPFS_XATTR TMPFS_POSIX_ACL
+          scripts/config --file "${CONFIG}" --enable DEVPTS_MULTIPLE_INSTANCES BLK_DEV_LOOP EXT4_FS
+          scripts/config --file "${CONFIG}" --enable VETH TUN BRIDGE NETFILTER
+          scripts/config --file "${CONFIG}" --enable NF_CONNTRACK IP_NF_IPTABLES NF_NAT
+          scripts/config --file "${CONFIG}" --enable IP_NF_TARGET_MASQUERADE NETFILTER_XT_TARGET_MASQUERADE
+          scripts/config --file "${CONFIG}" --enable FW_LOADER FW_LOADER_USER_HELPER
+          scripts/config --disable ANDROID_PARANOID_NETWORK
+
+          # Refresh config
+          make O="${OUT_DIR}" ARCH=arm64 \
+            CC="ccache clang" LD=ld.lld \
+            CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 \
+            olddefconfig
+
+          # Verify
           echo "=== DroidSpaces config check ==="
-          grep -E "TMPFS_POSIX_ACL|TMPFS_XATTR|NAMESPACES|PID_NS|SECCOMP|CGROUPS|DEVTMPFS|OVERLAY_FS|NET_NS|VETH|BRIDGE|NF_NAT" .config | grep -v "^#" | head -20
+          for cfg in NAMESPACES PID_NS NET_NS CGROUPS SECCOMP SECCOMP_FILTER DEVTMPFS OVERLAY_FS TMPFS_XATTR VETH BRIDGE; do
+            if grep -q "^CONFIG_${cfg}=y" "${CONFIG}"; then
+              echo "  OK: CONFIG_${cfg}=y"
+            else
+              echo "  MISSING: CONFIG_${cfg}"
+            fi
+          done
 
-      - name: Build kernel
+      - name: "Build kernel"
+        working-directory: kernel
         run: |
-          make -j$(nproc --all) Image dtbs 2>&1 | tee build.log
-        env:
-          LOCALVERSION: -droidspaces-v1
+          export PATH="${GITHUB_WORKSPACE}/clang/bin:${PATH}"
+          export KBUILD_BUILD_USER="Joel"
+          export KBUILD_BUILD_HOST="GitHub-Actions"
 
-      - name: Package artifacts
+          make O="${OUT_DIR}" ARCH=arm64 \
+            CC="ccache clang" LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 \
+            -j$(nproc --all) Image.gz 2>&1 | tee build.log
+
+      - name: "Build DTBs"
+        working-directory: kernel
         run: |
+          export PATH="${GITHUB_WORKSPACE}/clang/bin:${PATH}"
+          make O="${OUT_DIR}" ARCH=arm64 \
+            CC="ccache clang" LD=ld.lld \
+            CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 \
+            -j$(nproc --all) dtbs 2>&1 | tail -5
+
+      - name: "Package artifacts"
+        run: |
+          set -e
           mkdir -p output
-          cp arch/arm64/boot/Image output/
-          find arch/arm64/boot/dts/ -name "*.dtb" -exec cp {} output/ \;
-          cp .config output/build.config
-          cp build.log output/ 2>/dev/null || true
-          cd output && tar -czf ../begonia-droidspaces-kernel.tar.gz *
+          KERNEL_DIR="${GITHUB_WORKSPACE}/kernel"
 
-      - name: Upload kernel artifact
+          echo "=== Build outputs ==="
+          ls -lh "${KERNEL_DIR}/${OUT_DIR}/arch/arm64/boot/" 2>/dev/null || echo "(no boot dir)"
+
+          # Kernel image
+          if [ -f "${KERNEL_DIR}/${OUT_DIR}/arch/arm64/boot/Image.gz" ]; then
+            cp "${KERNEL_DIR}/${OUT_DIR}/arch/arm64/boot/Image.gz" output/
+            echo "Kernel: Image.gz ($(ls -lh output/Image.gz | awk '{print $5}'))"
+          elif [ -f "${KERNEL_DIR}/${OUT_DIR}/arch/arm64/boot/Image" ]; then
+            cp "${KERNEL_DIR}/${OUT_DIR}/arch/arm64/boot/Image" output/
+            echo "Kernel: Image ($(ls -lh output/Image | awk '{print $5}'))"
+          elif [ -f "${KERNEL_DIR}/vmlinux" ]; then
+            cp "${KERNEL_DIR}/vmlinux" output/
+            echo "Kernel: vmlinux ($(ls -lh output/vmlinux | awk '{print $5}'))"
+          else
+            echo "ERROR: No kernel image found!"
+            find "${KERNEL_DIR}/${OUT_DIR}/arch" -name "Image*" -o -name "vmlinux" 2>/dev/null || true
+            exit 1
+          fi
+
+          # DTBs
+          DTB_COUNT=0
+          while IFS= read -r dtb; do
+            cp "$dtb" output/
+            DTB_COUNT=$((DTB_COUNT+1))
+          done < <(find "${KERNEL_DIR}/${OUT_DIR}/arch/arm64/boot/dts" -name "*.dtb" 2>/dev/null || true)
+          echo "DTBs: ${DTB_COUNT}"
+
+          # Config + logs
+          cp "${KERNEL_DIR}/${OUT_DIR}/.config" output/ 2>/dev/null || true
+          cp "${KERNEL_DIR}/build.log" output/ 2>/dev/null || true
+
+          # Target for AnyKernel3 injection
+          if [ -f "${KERNEL_DIR}/${OUT_DIR}/arch/arm64/boot/Image.gz-dtb" ]; then
+            cp "${KERNEL_DIR}/${OUT_DIR}/arch/arm64/boot/Image.gz-dtb" output/
+            echo "Image.gz-dtb: yes"
+          fi
+
+          echo "=== Output ==="
+          ls -lh output/
+          cd output && tar -czf ../begonia-droidspaces-kernel.tar.gz .
+
+      - name: "Upload kernel artifact"
         uses: actions/upload-artifact@v4
         with:
-          name: begonia-droidspaces-kernel
+          name: "begonia-droidspaces-kernel-${{ inputs.tag || 'latest' }}"
           path: begonia-droidspaces-kernel.tar.gz
           retention-days: 90
-
-      - name: Build summary
-        run: |
-          echo "## Build Complete"
-          echo ""
-          echo "Device: Xiaomi Redmi Note 8 Pro (begonia)"
-          echo "Kernel: $KERNEL_VERSION"
-          echo "Defconfig: $DEFCONFIG"
-          echo "Branch: ${{ inputs.branch || 'droidspaces' }}"
-          echo ""
-          echo "### Artifacts"
-          echo "- Image - Kernel image"
-          echo "- *.dtb - Device tree blobs"
-          echo "- build.config - Build configuration"
