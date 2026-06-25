@@ -51,14 +51,23 @@ jobs:
       - name: "Download stock recovery (cross-repo via PAT)"
         run: |
           mkdir -p rec
-          echo "Downloading recovery artifact $RECOVERY_ARTIFACT_ID..."
-          curl -sL -H "Authorization: Bearer $GH_PAT" \
-            "https://api.github.com/repos/$RECOVERY_REPO/actions/artifacts/$RECOVERY_ARTIFACT_ID/zip" \
-            -o rec/recovery.zip
-          ls -lh rec/recovery.zip
-          unzip -o rec/recovery.zip -d rec/
-          rm -f rec/recovery.zip
-          ls -lh rec/
+          ARTIFACT_URL="https://api.github.com/repos/${RECOVERY_REPO}/actions/artifacts/${RECOVERY_ARTIFACT_ID}/zip"
+          echo "Downloading from: ${ARTIFACT_URL}"
+          TOK="${GH_PAT}"
+          echo "Token length: ${#TOK}"
+          HTTP_CODE=$(curl -sL -o rec/recovery.zip -w "%{http_code}" \
+            -H "Authorization: Bearer ${TOK}" "${ARTIFACT_URL}")
+          echo "HTTP: ${HTTP_CODE}"
+          ls -lh rec/recovery.zip 2>/dev/null || echo "Download failed!"
+          if [ -f rec/recovery.zip ] && [ -s rec/recovery.zip ]; then
+            unzip -o rec/recovery.zip -d rec/ && ls -lh rec/
+            rm -f rec/recovery.zip
+          else
+            echo "Recovery download failed, trying gh run download instead..."
+            GH_TOKEN="${TOK}" gh run download -R "${RECOVERY_REPO}" \
+              -n begonia-stock-recovery -D rec 28147575684 2>&1 || true
+            ls -lh rec/
+          fi
 
       - name: "Backup editor mods"
         run: |
