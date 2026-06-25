@@ -1,0 +1,86 @@
+name: "Kernel DroidSpaces (begonia)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch"
+        default: "droidspaces"
+      defconfig:
+        description: "Defconfig"
+        default: "begonia_user_defconfig"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 1
+          path: kernel
+
+      - name: Install deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bc bison flex libssl-dev libelf-dev cpio \
+            ccache perl python3 gcc-aarch64-linux-gnu device-tree-compiler lz4
+
+      - name: Clang cache
+        uses: actions/cache@v4
+        id: clang-cache
+        with:
+          path: clang
+          key: clang-r547379
+
+      - name: Get Clang
+        if: steps.clang-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir clang
+          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r547379.tar.gz -O - | tar -xz -C clang
+
+      - name: Config
+        working-directory: kernel
+        run: |
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          make O=out ARCH=arm64 CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 \
+            ${{ inputs.defconfig }}
+          # Enable DroidSpaces via scripts/config
+          scripts/config --file out/.config --enable NAMESPACES PID_NS NET_NS CGROUPS
+          scripts/config --file out/.config --enable SECCOMP SECCOMP_FILTER DEVTMPFS
+          scripts/config --file out/.config --enable OVERLAY_FS VETH BRIDGE NF_CONNTRACK
+          scripts/config --file out/.config --disable ANDROID_PARANOID_NETWORK
+          make O=out ARCH=arm64 CC=clang LD=ld.lld \
+            CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 olddefconfig
+          grep "^CONFIG_NAMESPACES=\|^CONFIG_NET_NS=\|^CONFIG_SECCOMP=\|^CONFIG_CGROUPS=" out/.config
+
+      - name: Build
+        working-directory: kernel
+        run: |
+          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          make O=out ARCH=arm64 CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 \
+            -j$(nproc) Image.gz dtbs 2>&1 | tee build.log
+          echo "---"
+          ls -lh out/arch/arm64/boot/
+
+      - name: Package
+        run: |
+          d=kernel/out/arch/arm64/boot
+          mkdir output
+          for f in Image.gz-dtb Image.gz Image; do [ -f "$d/$f" ] && cp "$d/$f" output/ && break; done
+          find kernel/out/arch/arm64/boot/dts -name "*.dtb" -exec cp {} output/ \; 2>/dev/null || true
+          cp kernel/out/.config kernel/build.log output/ 2>/dev/null || true
+          cd output && tar -czf ../kernel.tar.gz . && ls -lh ../kernel.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: begonia-droidspaces-kernel
+          path: kernel.tar.gz
+          retention-days: 90
