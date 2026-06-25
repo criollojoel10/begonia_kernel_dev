@@ -1,10 +1,10 @@
-name: "🪄 DroidSpaces Recovery Hack — begonia"
+name: "DroidSpaces Recovery Hack - begonia"
 
 on:
   workflow_dispatch:
     inputs:
       kernel_run_id:
-        description: "Run ID del kernel (vacío = último success branch droidspaces)"
+        description: "Run ID del kernel (vacio = ultimo success branch droidspaces)"
         required: false
         default: ""
       kernel_branch:
@@ -12,7 +12,7 @@ on:
         required: false
         default: "droidspaces"
       stock_recovery_run_id:
-        description: "Run ID del stock recovery (vacío = último success)"
+        description: "Run ID del stock recovery (vacio = ultimo success)"
         required: false
         default: ""
 
@@ -23,7 +23,7 @@ env:
 
 jobs:
   build-recovery-hack:
-    name: "Build DroidSpaces Recovery — begonia"
+    name: "Build DroidSpaces Recovery - begonia"
     runs-on: ubuntu-22.04
     timeout-minutes: 30
 
@@ -47,7 +47,6 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends \
             device-tree-compiler lz4 xz-utils zlib1g-dev python3 p7zip-full
 
-      # ── Resolve kernel run ID ──
       - name: "Resolve kernel run ID"
         id: kernel-run
         run: |
@@ -60,10 +59,9 @@ jobs:
               --status success -L 1 \
               --json databaseId -q '.[0].databaseId')
             echo "run_id=$ID" >> "$GITHUB_OUTPUT"
-            echo "→ Kernel run ID: $ID"
+            echo "--> Kernel run ID: $ID"
           fi
 
-      # ── Resolve stock recovery run ID ──
       - name: "Resolve stock recovery run ID"
         id: recovery-run
         run: |
@@ -75,10 +73,9 @@ jobs:
               --status success -L 1 \
               --json databaseId -q '.[0].databaseId')
             echo "run_id=$ID" >> "$GITHUB_OUTPUT"
-            echo "→ Stock recovery run ID: $ID"
+            echo "--> Stock recovery run ID: $ID"
           fi
 
-      # ── Download artifacts ──
       - name: "Download kernel artifact"
         run: |
           mkdir -p kernel-artifact
@@ -97,7 +94,6 @@ jobs:
             ${{ steps.recovery-run.outputs.run_id }}
           ls -lh stock-recovery/
 
-      # ── Save modified files from example repo BEFORE unpack ──
       - name: "Save example repo modified files"
         run: |
           mkdir -p /tmp/editor-mods
@@ -113,13 +109,12 @@ jobs:
             if [ -f "$f" ]; then
               mkdir -p "/tmp/editor-mods/$(dirname $f)"
               cp "$f" "/tmp/editor-mods/$f"
-              echo "✓ Saved: $f ($(stat -c%s "$f") bytes)"
+              echo "Saved: $f ($(stat -c%s "$f") bytes)"
             else
-              echo "⚠ Not found: $f"
+              echo "Not found: $f"
             fi
           done
 
-      # ── Unpack stock recovery ──
       - name: "Unpack stock recovery"
         working-directory: ./editor
         run: |
@@ -132,45 +127,39 @@ jobs:
           echo "---"
           ls build/unzip_boot/root/system/bin/ | head -15
 
-      # ── Inject modified files from example repo ──
       - name: "Inject DroidSpaces binaries and scripts"
         run: |
           ROOT=editor/build/unzip_boot/root
           MODS=/tmp/editor-mods/build/unzip_boot/root
 
-          # Restore binaries
-          cp -v "$MODS/system/bin/droidspaces" "$ROOT/system/bin/" || echo "⚠ droidspaces binary missing"
-          cp -v "$MODS/system/bin/recovery-console" "$ROOT/system/bin/" || echo "⚠ recovery-console missing"
-          cp -v "$MODS/system/bin/boot-ubuntu.sh" "$ROOT/system/bin/" || echo "⚠ boot-ubuntu.sh missing"
-          cp -v "$MODS/system/bin/selinux-permissive" "$ROOT/system/bin/" || echo "⚠ selinux-permissive missing"
+          cp -v "$MODS/system/bin/droidspaces" "$ROOT/system/bin/" || echo "droidspaces binary missing"
+          cp -v "$MODS/system/bin/recovery-console" "$ROOT/system/bin/" || echo "recovery-console missing"
+          cp -v "$MODS/system/bin/boot-ubuntu.sh" "$ROOT/system/bin/" || echo "boot-ubuntu.sh missing"
+          cp -v "$MODS/system/bin/selinux-permissive" "$ROOT/system/bin/" || echo "selinux-permissive missing"
 
           chmod 755 "$ROOT/system/bin/droidspaces" 2>/dev/null || true
           chmod 755 "$ROOT/system/bin/recovery-console" 2>/dev/null || true
           chmod 755 "$ROOT/system/bin/boot-ubuntu.sh" 2>/dev/null || true
           chmod 755 "$ROOT/system/bin/selinux-permissive" 2>/dev/null || true
 
-          # Restore init files
-          cp -v "$MODS/system/etc/environment" "$ROOT/system/etc/" || echo "⚠ environment missing"
+          cp -v "$MODS/system/etc/environment" "$ROOT/system/etc/" || echo "environment missing"
 
-          # Copy USB init
           mkdir -p "$ROOT/system/etc/init"
-          cp -v "$MODS/system/etc/init/init.recovery.usb.rc" "$ROOT/system/etc/init/" || echo "⚠ init.recovery.usb.rc missing"
+          cp -v "$MODS/system/etc/init/init.recovery.usb.rc" "$ROOT/system/etc/init/" || echo "init.recovery.usb.rc missing"
 
-          # Rename example → active for auto-boot
           cp -v "$MODS/system/etc/init/init.ubuntu-droidspaces.example.rc" \
                 "$ROOT/system/etc/init/init.ubuntu-droidspaces.rc" || \
-          echo "⚠ ubuntu-droidspaces init missing"
+          echo "ubuntu-droidspaces init missing"
 
           echo "=== Injected ==="
           ls -la "$ROOT/system/bin/droidspaces" "$ROOT/system/bin/recovery-console" \
                 "$ROOT/system/bin/boot-ubuntu.sh" "$ROOT/system/bin/selinux-permissive" 2>/dev/null
 
-      # ── Replace kernel ──
       - name: "Replace kernel with DroidSpaces build"
         run: |
           mkdir -p kernel-out
           tar -xzf kernel-artifact/kernel.tar.gz -C kernel-out/ 2>/dev/null || {
-            echo "✗ kernel.tar.gz not found in artifact"
+            echo "kernel.tar.gz not found in artifact"
             ls -la kernel-artifact/
             exit 1
           }
@@ -181,35 +170,30 @@ jobs:
           EDITOR_KERNEL=editor/build/unzip_boot/kernel
           echo "Stock kernel: $(stat -c%s "$EDITOR_KERNEL" 2>/dev/null || echo 'N/A') bytes"
 
-          # Prefer Image.gz-dtb > Image.gz > Image
           if [ -f kernel-out/Image.gz-dtb ]; then
             cp kernel-out/Image.gz-dtb "$EDITOR_KERNEL"
-            echo "✓ Replaced with Image.gz-dtb ($(stat -c%s "$EDITOR_KERNEL") bytes)"
+            echo "Replaced with Image.gz-dtb ($(stat -c%s "$EDITOR_KERNEL") bytes)"
           elif [ -f kernel-out/Image.gz ]; then
             cp kernel-out/Image.gz "$EDITOR_KERNEL"
-            echo "✓ Replaced with Image.gz ($(stat -c%s "$EDITOR_KERNEL") bytes)"
+            echo "Replaced with Image.gz ($(stat -c%s "$EDITOR_KERNEL") bytes)"
           elif [ -f kernel-out/Image ]; then
             cp kernel-out/Image "$EDITOR_KERNEL"
-            echo "✓ Replaced with Image ($(stat -c%s "$EDITOR_KERNEL") bytes)"
+            echo "Replaced with Image ($(stat -c%s "$EDITOR_KERNEL") bytes)"
           else
-            echo "✗ No kernel image found!"
+            echo "No kernel image found!"
             find kernel-out/ -type f | head -20
             exit 1
           fi
 
-          # Copy DTBs if any
           find kernel-out/ -name "*.dtb" -exec cp {} editor/build/unzip_boot/ \; 2>/dev/null || true
           echo "DTBs: $(find editor/build/unzip_boot/ -name '*.dtb' | wc -l)"
 
-      # ── Apply ramdisk modifications ──
       - name: "Apply ramdisk modifications"
         run: |
           ROOT=editor/build/unzip_boot/root
 
-          # ── init.rc modifications ──
           RC="$ROOT/system/etc/init/hw/init.rc"
           if [ ! -f "$RC" ]; then
-            # Try alternative locations
             RC=$(find "$ROOT" -name "init.rc" -path "*/etc/init*" | head -1)
           fi
           echo "=== init.rc: $RC ==="
@@ -217,10 +201,9 @@ jobs:
           if [ -f "$RC" ]; then
             cp "$RC" "$RC.stock"
 
-            # 1) Add selinux-permissive start in init trigger
             if ! grep -q "selinux-permissive" "$RC"; then
               sed -i '/^on init/a\    start selinux-permissive' "$RC"
-              echo "  ✓ Added start selinux-permissive"
+              echo "Added start selinux-permissive"
 
               cat >> "$RC" << 'EOF'
 
@@ -231,21 +214,19 @@ service selinux-permissive /system/bin/selinux-permissive
     oneshot
     seclabel u:r:recovery:s0
 EOF
-              echo "  ✓ Added selinux-permissive service"
+              echo "Added selinux-permissive service"
             fi
 
-            # 2) Disable recovery service
             if grep -q "^service recovery " "$RC"; then
               sed -i '/^service recovery /a\    disabled' "$RC"
-              echo "  ✓ Disabled recovery UI"
+              echo "Disabled recovery UI"
             fi
 
-            echo "=== init.rc changes applied ==="
+            echo "init.rc changes applied"
           else
-            echo "⚠ No init.rc found!"
+            echo "No init.rc found!"
           fi
 
-          # ── prop.default modifications ──
           PROPDFLT="$ROOT/prop.default"
           if [ ! -f "$PROPDFLT" ]; then
             PROPDFLT=$(find "$ROOT" -name "prop.default" | head -1)
@@ -267,14 +248,13 @@ EOF
                 echo "$pair" >> "$PROPDFLT"
               fi
             done
-            echo "✓ prop.default updated"
+            echo "prop.default updated"
           else
-            echo "⚠ No prop.default found"
+            echo "No prop.default found"
           fi
 
-          echo "=== Ramdisk modifications complete ==="
+          echo "Ramdisk modifications complete"
 
-      # ── Repack recovery ──
       - name: "Repack recovery image"
         working-directory: ./editor
         run: |
@@ -283,7 +263,6 @@ EOF
           echo "=== Output ==="
           ls -lh *.signed 2>/dev/null || echo "No .signed output"
 
-      # ── Upload ──
       - name: "Upload DroidSpaces recovery"
         uses: actions/upload-artifact@v4
         with:
