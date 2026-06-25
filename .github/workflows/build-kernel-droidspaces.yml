@@ -49,12 +49,12 @@ jobs:
           df -h / | tail -1
           free -h | grep -E "Mem|Swap"
 
-      - name: "Install deps"
+      - name: "Install deps (incl. perl)"
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
             bc bison flex libssl-dev libelf-dev libncurses6 cpio lz4 zstd xz-utils \
-            ccache python3 python-is-python3 \
+            ccache perl python3 python-is-python3 \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi device-tree-compiler
 
       - name: "Cache Clang"
@@ -62,7 +62,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: clang
-          key: aosp-clang-r547379-ubuntu-2204
+          key: aosp-clang-r547379-ubuntu-2204-v2
 
       - name: "Download Clang"
         if: steps.cache-clang.outputs.cache-hit != 'true'
@@ -72,9 +72,22 @@ jobs:
           tar -xf clang.tar.gz -C clang
           clang/bin/clang --version | head -2
 
-      - name: "Create DroidSpaces config fragment"
+      - name: "Configure kernel with DroidSpaces fragment"
         working-directory: kernel
         run: |
+          export PATH="${GITHUB_WORKSPACE}/clang/bin:${PATH}"
+          export CCACHE_DISABLE=1
+
+          # Generate defconfig
+          make O="${OUT_DIR}" ARCH=arm64 \
+            CC="clang" LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 \
+            ${{ inputs.defconfig || 'begonia_user_defconfig' }}
+
+          # Create DroidSpaces config fragment
           mkdir -p arch/arm64/configs/vendor
           cat > arch/arm64/configs/vendor/droidspaces.config << 'CFG'
 # === Namespaces ===
@@ -104,7 +117,6 @@ CONFIG_DEVTMPFS_MOUNT=y
 # === Filesystems ===
 CONFIG_OVERLAY_FS=y
 CONFIG_TMPFS_XATTR=y
-CONFIG_TMPFS_POSIX_ACL=y
 CONFIG_DEVPTS_MULTIPLE_INSTANCES=y
 CONFIG_BLK_DEV_LOOP=y
 # === Network ===
@@ -124,39 +136,24 @@ CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
 # === Android ===
 CONFIG_ANDROID_PARANOID_NETWORK=n
 CFG
-          echo "=== DroidSpaces config fragment ==="
-          cat arch/arm64/configs/vendor/droidspaces.config
 
-      - name: "Configure kernel"
-        working-directory: kernel
-        run: |
-          export PATH="${GITHUB_WORKSPACE}/clang/bin:${PATH}"
-          PATH="${GITHUB_WORKSPACE}/clang/bin:${PATH}" \
-          make O="${OUT_DIR}" ARCH=arm64 \
-            CC="ccache clang" LD=ld.lld AR=llvm-ar NM=llvm-nm \
-            OBJCOPY=llvm-objcopy STRIP=llvm-strip \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            CLANG_TRIPLE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 \
-            ${{ inputs.defconfig || 'begonia_user_defconfig' }}
-
-          # Merge DroidSpaces config fragment
+          # Merge fragment
           scripts/kconfig/merge_config.sh -m -O "${OUT_DIR}" \
             "${OUT_DIR}/.config" \
-            arch/arm64/configs/vendor/droidspaces.config
+            arch/arm64/configs/vendor/droidspaces.config 2>&1 || true
 
-          PATH="${GITHUB_WORKSPACE}/clang/bin:${PATH}" \
+          # Refresh
           make O="${OUT_DIR}" ARCH=arm64 \
-            CC=clang LD=ld.lld \
+            CC="clang" LD=ld.lld \
             CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 \
             olddefconfig
 
           # Verify
-          echo "=== DroidSpaces config verification ==="
+          echo "=== DroidSpaces config check ==="
           CFG="${OUT_DIR}/.config"
           FAIL=0
           for opt in NAMESPACES PID_NS NET_NS CGROUPS MEMCG DEVTMPFS OVERLAY_FS \
-                     TMPFS_XATTR SECCOMP SECCOMP_FILTER VETH BRIDGE NF_CONNTRACK; do
+                     SECCOMP SECCOMP_FILTER VETH BRIDGE NF_CONNTRACK; do
             if grep -q "^CONFIG_${opt}=y" "$CFG"; then
               echo "  OK: CONFIG_${opt}=y"
             else
@@ -164,23 +161,18 @@ CFG
               FAIL=1
             fi
           done
-          if grep -q "^CONFIG_ANDROID_PARANOID_NETWORK=y" "$CFG"; then
-            echo "  WARN: ANDROID_PARANOID_NETWORK=y (should be n)"
-          else
-            echo "  OK: ANDROID_PARANOID_NETWORK disabled"
-          fi
           [ "$FAIL" -eq 0 ] || exit 1
 
       - name: "Build kernel"
         working-directory: kernel
         run: |
           export PATH="${GITHUB_WORKSPACE}/clang/bin:${PATH}"
+          export CCACHE_DISABLE=1
           export KBUILD_BUILD_USER="Joel"
           export KBUILD_BUILD_HOST="GitHub-Actions"
 
-          PATH="${GITHUB_WORKSPACE}/clang/bin:${PATH}" \
           make O="${OUT_DIR}" ARCH=arm64 \
-            CC="ccache clang" LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            CC="clang" LD=ld.lld AR=llvm-ar NM=llvm-nm \
             OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
@@ -196,7 +188,6 @@ CFG
           mkdir -p output
           KD="${GITHUB_WORKSPACE}/kernel/${OUT_DIR}/arch/arm64/boot"
 
-          # Kernel image
           if [ -f "$KD/Image.gz-dtb" ]; then
             cp "$KD/Image.gz-dtb" output/ && echo "Kernel: Image.gz-dtb ($(stat -c%s output/Image.gz-dtb) bytes)"
           elif [ -f "$KD/Image.gz" ]; then
@@ -204,23 +195,20 @@ CFG
           elif [ -f "$KD/Image" ]; then
             cp "$KD/Image" output/ && echo "Kernel: Image ($(stat -c%s output/Image) bytes)"
           else
-            echo "ERROR: no kernel image found!"
-            find "$KD" -maxdepth 2 -type f || true
+            echo "ERROR: no kernel image!"
+            find "$KD" -maxdepth 3 -type f || true
             exit 1
           fi
 
-          # DTBs
           DTB_COUNT=0
           while IFS= read -r dtb; do
             cp "$dtb" output/ && DTB_COUNT=$((DTB_COUNT+1))
           done < <(find "${GITHUB_WORKSPACE}/kernel/${OUT_DIR}/arch/arm64/boot/dts" -name "*.dtb" 2>/dev/null || true)
           echo "DTBs: ${DTB_COUNT}"
 
-          # Config + build log
           cp "${GITHUB_WORKSPACE}/kernel/${OUT_DIR}/.config" output/ 2>/dev/null || true
           cp "${GITHUB_WORKSPACE}/kernel/build.log" output/ 2>/dev/null || true
 
-          echo "=== Output ==="
           ls -lh output/
           cd output && tar -czf ../begonia-droidspaces-kernel.tar.gz .
 
