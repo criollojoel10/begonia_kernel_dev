@@ -1,0 +1,22 @@
+name: "Dispatch DroidSpaces Recovery Hack"
+
+on:
+  push:
+    branches: [ "dispatch-recovery" ]
+
+jobs:
+  trigger:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: "Dispatch recovery hack workflow"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run droidspaces-recovery.yml \
+            -R ${{ github.repository }} \
+            --ref ${{ github.ref_name }}
