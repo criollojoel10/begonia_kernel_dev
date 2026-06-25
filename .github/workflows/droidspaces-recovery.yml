@@ -2,6 +2,11 @@ name: "DroidSpaces Recovery Hack - begonia"
 
 on:
   workflow_dispatch:
+    inputs:
+      GH_PAT:
+        description: "GitHub PAT for cross-repo artifact download"
+        required: true
+        type: string
   push:
     branches: [ "droidspaces-recovery" ]
 
@@ -11,7 +16,7 @@ env:
   RECOVERY_ARTIFACT_ID: "7869123359"
   KERNEL_REPO: criollojoel10/begonia_kernel_dev
   RECOVERY_OTHER_REPO: criollojoel10/begonia-lineage-builder
-  GH_PAT: ${{ secrets.GH_PAT }}
+  GH_PAT: ${{ inputs.GH_PAT || github.token }}
 
 jobs:
   build:
