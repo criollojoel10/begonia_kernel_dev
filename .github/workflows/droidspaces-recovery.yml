@@ -1,6 +1,7 @@
 name: "DroidSpaces Recovery Hack - begonia"
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "droidspaces-recovery" ]
 
@@ -10,7 +11,7 @@ env:
   RECOVERY_ARTIFACT_ID: "7869123359"
   KERNEL_REPO: criollojoel10/begonia_kernel_dev
   RECOVERY_OTHER_REPO: criollojoel10/begonia-lineage-builder
-  GH_PAT: "gho_BwyOfuPtL8Qu5e7bpqCa5cl6n"
+  GH_PAT: ${{ secrets.GH_PAT }}
 
 jobs:
   build:
