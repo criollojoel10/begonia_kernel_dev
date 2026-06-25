@@ -27,8 +27,8 @@ jobs:
         run: |
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           make O=out ARCH=arm64 CC=clang LD=ld.lld CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 ${{ inputs.defconfig || 'begonia_user_defconfig' }}
-          scripts/config --file out/.config --enable NAMESPACES PID_NS NET_NS CGROUPS SECCOMP
-          scripts/config --file out/.config --enable DEVTMPFS OVERLAY_FS VETH BRIDGE
+          scripts/config --file out/.config --enable NAMESPACES --enable PID_NS --enable NET_NS --enable CGROUPS --enable SECCOMP
+          scripts/config --file out/.config --enable DEVTMPFS --enable OVERLAY_FS --enable VETH --enable BRIDGE
           scripts/config --file out/.config --disable ANDROID_PARANOID_NETWORK
           make O=out ARCH=arm64 CC=clang LD=ld.lld CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 olddefconfig
           grep "^CONFIG_NAMESPACES=\|^CONFIG_SECCOMP=\|^CONFIG_CGROUPS=\|^CONFIG_VETH=" out/.config
