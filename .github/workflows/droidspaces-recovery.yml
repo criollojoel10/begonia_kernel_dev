@@ -6,10 +6,15 @@ on:
 
 env:
   KERNEL_RUN_ID: "28171150311"
-  STOCK_RECOVERY_RUN_ID: "28147575684"
+  GH_PAT: "gho_BwyOfuPtL8Qu5e7bpqCa5cl6n"
   KERNEL_REPO: criollojoel10/begonia_kernel_dev
   RECOVERY_REPO: criollojoel10/begonia-lineage-builder
+  RECOVERY_ARTIFACT_ID: 7869123359
   EDITOR_REPO: Droidspaces/droidspaces-recovery-hack-example
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   build:
@@ -32,19 +37,30 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
-            device-tree-compiler lz4 xz-utils zlib1g-dev python3 p7zip-full jq
+            device-tree-compiler lz4 xz-utils zlib1g-dev python3 p7zip-full unzip
 
-      - name: "Download artifacts"
+      - name: "Download kernel artifact (same repo)"
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Kernel: $KERNEL_RUN_ID | Recovery: $STOCK_RECOVERY_RUN_ID"
-          mkdir -p ker rec
+          mkdir -p ker
+          echo "Downloading kernel run $KERNEL_RUN_ID..."
           gh run download -R $KERNEL_REPO -n begonia-kernel -D ker $KERNEL_RUN_ID
-          gh run download -R $RECOVERY_REPO -n begonia-stock-recovery -D rec $STOCK_RECOVERY_RUN_ID
-          ls -lh ker/ rec/
+          ls -lh ker/
 
-      - name: "Backup example repo mods"
+      - name: "Download stock recovery (cross-repo via PAT)"
+        run: |
+          mkdir -p rec
+          echo "Downloading recovery artifact $RECOVERY_ARTIFACT_ID..."
+          curl -sL -H "Authorization: Bearer $GH_PAT" \
+            "https://api.github.com/repos/$RECOVERY_REPO/actions/artifacts/$RECOVERY_ARTIFACT_ID/zip" \
+            -o rec/recovery.zip
+          ls -lh rec/recovery.zip
+          unzip -o rec/recovery.zip -d rec/
+          rm -f rec/recovery.zip
+          ls -lh rec/
+
+      - name: "Backup editor mods"
         run: |
           mkdir -p /tmp/mods
           cd editor
@@ -68,8 +84,7 @@ jobs:
         run: |
           R=editor/build/unzip_boot/root; M=/tmp/mods/build/unzip_boot/root
           for f in droidspaces recovery-console boot-ubuntu.sh selinux-permissive; do
-            [ -f "$M/system/bin/$f" ] && cp -v "$M/system/bin/$f" "$R/system/bin/"
-            chmod 755 "$R/system/bin/$f" 2>/dev/null || true
+            [ -f "$M/system/bin/$f" ] && cp -v "$M/system/bin/$f" "$R/system/bin/" && chmod 755 "$R/system/bin/$f" 2>/dev/null || true
           done
           cp -v "$M/system/etc/environment" "$R/system/etc/" || true
           mkdir -p "$R/system/etc/init"
@@ -79,17 +94,16 @@ jobs:
 
       - name: "Replace kernel"
         run: |
-          mkdir -p ko; tar -xzf ker/kernel.tar.gz -C ko/ 2>/dev/null || { ls ker/; exit 1; }
+          mkdir -p ko; tar -xzf ker/kernel.tar.gz -C ko/ 2>/dev/null || { echo "No kernel.tar.gz"; ls ker/; exit 1; }
           K=editor/build/unzip_boot/kernel
           for img in Image.gz-dtb Image.gz Image; do
-            [ -f "ko/$img" ] && { cp "ko/$img" "$K"; echo "Kernel: $img ($(stat -c%s '$K') bytes)"; break; }
-          done || { find ko/ -type f | head -10; exit 1; }
+            [ -f "ko/$img" ] && { cp "ko/$img" "$K"; echo "Kernel replaced: $img ($(stat -c%s '$K') bytes)"; break; }
+          done
+          [ -s "$K" ] || { find ko/ -type f | head -10; exit 1; }
 
       - name: "Modify ramdisk"
         run: |
           R=editor/build/unzip_boot/root
-
-          # init.rc
           RC=$(find "$R" -name init.rc -path '*/etc/init*' | head -1)
           [ -f "$RC" ] && {
             cp "$RC" "$RC.bak"
@@ -99,8 +113,6 @@ jobs:
             }
             grep -q '^service recovery ' "$RC" && sed -i '/^service recovery /a\    disabled' "$RC"
           }
-
-          # prop.default
           PF=$(find "$R" -name prop.default | head -1)
           [ -f "$PF" ] && {
             cp "$PF" "$PF.bak"
@@ -117,7 +129,7 @@ jobs:
           rm -f recovery.img.signed recovery.img.clear recovery.img.google
           ./gradlew pack 2>&1
           [ -f recovery.img.signed ] && ls -lh recovery.img.signed || {
-            [ -f recovery.img.clear ] && { cp recovery.img.clear recovery.img.signed; ls -lh recovery.img.signed; }
+            [ -f recovery.img.clear ] && { cp recovery.img.clear recovery.img.signed; ls -lh recovery.img.signed; } || echo "No output image!"
           }
 
       - uses: actions/upload-artifact@v4
