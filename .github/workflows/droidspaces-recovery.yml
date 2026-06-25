@@ -1,237 +1,137 @@
 name: "DroidSpaces Recovery Hack - begonia"
 
 on:
-  workflow_dispatch:
-    inputs:
-      kernel_run_id:
-        description: "Run ID del kernel"
-        required: false
-        default: ""
-      kernel_branch:
-        description: "Branch del kernel"
-        required: false
-        default: "droidspaces"
-      stock_recovery_run_id:
-        description: "Run ID del stock recovery"
-        required: false
-        default: ""
+  push:
+    branches: [ "droidspaces-recovery" ]
 
 env:
+  KERNEL_RUN_ID: "28171150311"
+  STOCK_RECOVERY_RUN_ID: "28147575684"
   KERNEL_REPO: criollojoel10/begonia_kernel_dev
   RECOVERY_REPO: criollojoel10/begonia-lineage-builder
   EDITOR_REPO: Droidspaces/droidspaces-recovery-hack-example
-  DEFAULT_KERNEL_RUN: "28171150311"
-  DEFAULT_STOCK_RECOVERY_RUN: "28147575684"
 
 jobs:
-  build-recovery-hack:
-    name: "Build DroidSpaces Recovery - begonia"
+  build:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
 
     steps:
-      - name: "Checkout droidspaces-recovery-hack-example"
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: ${{ env.EDITOR_REPO }}
           path: editor
           fetch-depth: 1
 
-      - name: "Setup Java 17"
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: "temurin"
           java-version: "17"
 
-      - name: "Install system deps"
+      - name: "Install deps"
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
-            device-tree-compiler lz4 xz-utils zlib1g-dev python3 p7zip-full
-          sudo apt-get install -y -qq jq
+            device-tree-compiler lz4 xz-utils zlib1g-dev python3 p7zip-full jq
 
-      - name: "Resolve kernel run ID"
-        id: kernel-run
+      - name: "Download artifacts"
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ID="${{ inputs.kernel_run_id || env.DEFAULT_KERNEL_RUN }}"
-          if [ -z "$ID" ]; then
-            ID=$(gh run list -R $KERNEL_REPO --workflow build-kernel.yml \
-              --branch ${{ inputs.kernel_branch || 'droidspaces' }} \
-              --status success -L 1 --json databaseId -q '.[0].databaseId')
-          fi
-          echo "run_id=$ID" >> "$GITHUB_OUTPUT"
-          echo "--> Kernel run ID: $ID"
+          echo "Kernel: $KERNEL_RUN_ID | Recovery: $STOCK_RECOVERY_RUN_ID"
+          mkdir -p ker rec
+          gh run download -R $KERNEL_REPO -n begonia-kernel -D ker $KERNEL_RUN_ID
+          gh run download -R $RECOVERY_REPO -n begonia-stock-recovery -D rec $STOCK_RECOVERY_RUN_ID
+          ls -lh ker/ rec/
 
-      - name: "Resolve stock recovery run ID"
-        id: recovery-run
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: "Backup example repo mods"
         run: |
-          ID="${{ inputs.stock_recovery_run_id || env.DEFAULT_STOCK_RECOVERY_RUN }}"
-          if [ -z "$ID" ]; then
-            ID=$(gh run list -R $RECOVERY_REPO --workflow "05" \
-              --status success -L 1 --json databaseId -q '.[0].databaseId')
-          fi
-          echo "run_id=$ID" >> "$GITHUB_OUTPUT"
-          echo "--> Stock recovery run ID: $ID"
-
-      - name: "Download kernel artifact"
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p kernel-artifact
-          gh run download -R $KERNEL_REPO -n begonia-kernel \
-            -D kernel-artifact ${{ steps.kernel-run.outputs.run_id }}
-          ls -lh kernel-artifact/
-
-      - name: "Download stock recovery artifact"
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p stock-recovery
-          gh run download -R $RECOVERY_REPO -n begonia-stock-recovery \
-            -D stock-recovery ${{ steps.recovery-run.outputs.run_id }}
-          ls -lh stock-recovery/
-
-      - name: "Save example repo modified files"
-        run: |
-          mkdir -p /tmp/editor-mods
+          mkdir -p /tmp/mods
           cd editor
-          for f in \
-            build/unzip_boot/root/system/bin/droidspaces \
+          for f in build/unzip_boot/root/system/bin/droidspaces \
             build/unzip_boot/root/system/bin/recovery-console \
             build/unzip_boot/root/system/bin/boot-ubuntu.sh \
             build/unzip_boot/root/system/bin/selinux-permissive \
             build/unzip_boot/root/system/etc/init/init.ubuntu-droidspaces.example.rc \
             build/unzip_boot/root/system/etc/environment \
             build/unzip_boot/root/system/etc/init/init.recovery.usb.rc; do
-            if [ -f "$f" ]; then
-              mkdir -p "/tmp/editor-mods/$(dirname $f)"
-              cp "$f" "/tmp/editor-mods/$f"
-              echo "Saved: $f ($(stat -c%s "$f") bytes)"
-            else
-              echo "Not found: $f"
-            fi
+            [ -f "$f" ] && mkdir -p "/tmp/mods/$(dirname "$f")" && cp "$f" "/tmp/mods/$f"
           done
 
-      - name: "Unpack stock recovery"
+      - name: "Unpack"
         working-directory: ./editor
         run: |
-          rm -f recovery.img *.img
-          cp ../stock-recovery/recovery.img ./recovery.img
-          ls -lh recovery.img
+          rm -f recovery.img; cp ../rec/recovery.img .; ls -lh recovery.img
           ./gradlew unpack 2>&1
-          echo "=== Post-unpack ==="
-          ls -la build/unzip_boot/ && ls build/unzip_boot/root/system/bin/ | head -15
 
-      - name: "Inject DroidSpaces binaries and scripts"
+      - name: "Inject DroidSpaces files"
         run: |
-          ROOT=editor/build/unzip_boot/root
-          MODS=/tmp/editor-mods/build/unzip_boot/root
-
+          R=editor/build/unzip_boot/root; M=/tmp/mods/build/unzip_boot/root
           for f in droidspaces recovery-console boot-ubuntu.sh selinux-permissive; do
-            cp -v "$MODS/system/bin/$f" "$ROOT/system/bin/" || echo "$f missing"
-            chmod 755 "$ROOT/system/bin/$f" 2>/dev/null || true
+            [ -f "$M/system/bin/$f" ] && cp -v "$M/system/bin/$f" "$R/system/bin/"
+            chmod 755 "$R/system/bin/$f" 2>/dev/null || true
           done
+          cp -v "$M/system/etc/environment" "$R/system/etc/" || true
+          mkdir -p "$R/system/etc/init"
+          cp -v "$M/system/etc/init/init.recovery.usb.rc" "$R/system/etc/init/" || true
+          cp -v "$M/system/etc/init/init.ubuntu-droidspaces.example.rc" \
+                "$R/system/etc/init/init.ubuntu-droidspaces.rc" || true
 
-          cp -v "$MODS/system/etc/environment" "$ROOT/system/etc/" || echo "environment missing"
-          mkdir -p "$ROOT/system/etc/init"
-          cp -v "$MODS/system/etc/init/init.recovery.usb.rc" "$ROOT/system/etc/init/" || echo "init.recovery.usb.rc missing"
-          cp -v "$MODS/system/etc/init/init.ubuntu-droidspaces.example.rc" \
-                "$ROOT/system/etc/init/init.ubuntu-droidspaces.rc" || echo "ubuntu init missing"
-
-          echo "=== Injected ==="
-          ls -la "$ROOT/system/bin/droidspaces" "$ROOT/system/bin/recovery-console" \
-                "$ROOT/system/bin/boot-ubuntu.sh" "$ROOT/system/bin/selinux-permissive" 2>/dev/null
-
-      - name: "Replace kernel with DroidSpaces build"
+      - name: "Replace kernel"
         run: |
-          mkdir -p kernel-out
-          tar -xzf kernel-artifact/kernel.tar.gz -C kernel-out/ 2>/dev/null || {
-            echo "kernel.tar.gz not found"; ls -la kernel-artifact/; exit 1
-          }
-          ls -lh kernel-out/
-          EDITOR_KERNEL=editor/build/unzip_boot/kernel
-
+          mkdir -p ko; tar -xzf ker/kernel.tar.gz -C ko/ 2>/dev/null || { ls ker/; exit 1; }
+          K=editor/build/unzip_boot/kernel
           for img in Image.gz-dtb Image.gz Image; do
-            if [ -f "kernel-out/$img" ]; then
-              cp "kernel-out/$img" "$EDITOR_KERNEL"
-              echo "Replaced with $img ($(stat -c%s "$EDITOR_KERNEL") bytes)"
-              break
-            fi
-          done
-          if [ ! -f "$EDITOR_KERNEL" ] || [ ! -s "$EDITOR_KERNEL" ]; then
-            echo "No kernel image found!"; find kernel-out/ -type f | head -20; exit 1
-          fi
+            [ -f "ko/$img" ] && { cp "ko/$img" "$K"; echo "Kernel: $img ($(stat -c%s '$K') bytes)"; break; }
+          done || { find ko/ -type f | head -10; exit 1; }
 
-          find kernel-out/ -name "*.dtb" -exec cp {} editor/build/unzip_boot/ \; 2>/dev/null || true
-          echo "DTBs: $(find editor/build/unzip_boot/ -name '*.dtb' | wc -l)"
-
-      - name: "Apply ramdisk modifications"
+      - name: "Modify ramdisk"
         run: |
-          ROOT=editor/build/unzip_boot/root
+          R=editor/build/unzip_boot/root
 
           # init.rc
-          RC="$ROOT/system/etc/init/hw/init.rc"
-          [ -f "$RC" ] || RC=$(find "$ROOT" -name "init.rc" -path "*/etc/init*" | head -1)
-          if [ -f "$RC" ]; then
-            cp "$RC" "$RC.stock"
-            if ! grep -q "selinux-permissive" "$RC"; then
+          RC=$(find "$R" -name init.rc -path '*/etc/init*' | head -1)
+          [ -f "$RC" ] && {
+            cp "$RC" "$RC.bak"
+            grep -q 'selinux-permissive' "$RC" || {
               sed -i '/^on init/a\    start selinux-permissive' "$RC"
-              cat >> "$RC" << 'EOF'
-
-service selinux-permissive /system/bin/selinux-permissive
-    class core; user root; group root; oneshot; seclabel u:r:recovery:s0
-EOF
-              echo "Added selinux-permissive"
-            fi
-            grep -q "^service recovery " && sed -i '/^service recovery /a\    disabled' "$RC"
-            echo "init.rc done"
-          else
-            echo "No init.rc!"
-          fi
+              echo -e '\nservice selinux-permissive /system/bin/selinux-permissive\n    class core\n    user root\n    group root\n    oneshot\n    seclabel u:r:recovery:s0' >> "$RC"
+            }
+            grep -q '^service recovery ' "$RC" && sed -i '/^service recovery /a\    disabled' "$RC"
+          }
 
           # prop.default
-          PROPF=$(find "$ROOT" -name "prop.default" | head -1)
-          if [ -f "$PROPF" ]; then
-            cp "$PROPF" "$PROPF.stock"
-            for pair in "ro.secure=0" "ro.adb.secure=0" "ro.debuggable=1" \
-                        "service.adb.root=1" "ro.force.debuggable=1"; do
-              k="${pair%%=*}"; v="${pair#*=}"
-              grep -q "^${k}=" "$PROPF" && sed -i "s/^${k}=.*/${k}=${v}/" "$PROPF" || echo "$pair" >> "$PROPF"
+          PF=$(find "$R" -name prop.default | head -1)
+          [ -f "$PF" ] && {
+            cp "$PF" "$PF.bak"
+            for kv in 'ro.secure=0' 'ro.adb.secure=0' 'ro.debuggable=1' \
+                      'service.adb.root=1' 'ro.force.debuggable=1'; do
+              k="${kv%%=*}"; v="${kv#*=}"
+              grep -q "^${k}=" "$PF" && sed -i "s/^${k}=.*/${k}=${v}/" "$PF" || echo "$kv" >> "$PF"
             done
-            echo "prop.default done"
-          else
-            echo "No prop.default"
-          fi
+          }
 
-      - name: "Repack recovery image"
+      - name: "Repack"
         working-directory: ./editor
         run: |
           rm -f recovery.img.signed recovery.img.clear recovery.img.google
           ./gradlew pack 2>&1
-          ls -lh *.signed 2>/dev/null || {
-            echo "No .signed, trying .clear..."
-            [ -f recovery.img.clear ] && cp recovery.img.clear recovery.img.signed
+          [ -f recovery.img.signed ] && ls -lh recovery.img.signed || {
+            [ -f recovery.img.clear ] && { cp recovery.img.clear recovery.img.signed; ls -lh recovery.img.signed; }
           }
 
-      - name: "Upload DroidSpaces recovery"
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: begonia-droidspaces-recovery
           path: editor/recovery.img.signed
           retention-days: 90
 
-      - name: "Upload debug info (on failure)"
+      - uses: actions/upload-artifact@v4
         if: failure()
-        uses: actions/upload-artifact@v4
         with:
-          name: recovery-hack-debug
+          name: debug
           path: |
             editor/build/unzip_boot/
             editor/recovery.img.*
-            kernel-artifact/
-            stock-recovery/
+            ker/ rec/
           retention-days: 14
