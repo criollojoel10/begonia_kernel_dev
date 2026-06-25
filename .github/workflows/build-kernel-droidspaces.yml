@@ -11,17 +11,12 @@ on:
         description: 'Branch to build'
         required: false
         default: 'droidspaces'
-      kernel_version:
-        description: 'Kernel version label'
-        required: false
-        default: '4.14.356-droidspaces'
 
 env:
   DEFCONFIG: begonia_user_defconfig
   ARCH: arm64
   CROSS_COMPILE: aarch64-linux-gnu-
   CC: gcc
-  KERNEL_VERSION: 4.14.356-droidspaces
 
 jobs:
   build-kernel:
@@ -35,66 +30,60 @@ jobs:
           ref: ${{ inputs.branch || 'droidspaces' }}
           fetch-depth: 1
 
-      - name: Install toolchain and dependencies
+      - name: Install toolchain
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            gcc-aarch64-linux-gnu \
-            binutils-aarch64-linux-gnu \
-            libc6-dev-arm64-cross \
-            device-tree-compiler \
-            lz4 xz-utils zstd \
-            cpio \
-            bc bison flex \
-            libssl-dev \
-            python3 \
-            --no-install-recommends
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            libc6-dev-arm64-cross device-tree-compiler lz4 xz-utils zstd cpio \
+            bc bison flex libssl-dev python3 --no-install-recommends
           sudo apt-get clean
-
-      - name: Verify toolchain
-        run: |
-          aarch64-linux-gnu-gcc --version
-          echo "CC test:"
-          echo 'int main(){return 0;}' | aarch64-linux-gnu-gcc -x c - -o /dev/null && echo "OK" || echo "FAIL"
 
       - name: Configure kernel
         run: |
           make $DEFCONFIG
           echo "=== DroidSpaces config check ==="
-          grep -E "TMPFS_POSIX_ACL|TMPFS_XATTR|NAMESPACES|PID_NS|SECCOMP|CGROUPS|DEVTMPFS|OVERLAY_FS|NET_NS|VETH|BRIDGE|NF_NAT" .config | grep -v "^#" | head -20
+          grep -E "TMPFS_POSIX_ACL|TMPFS_XATTR|NAMESPACES|PID_NS|SECCOMP|CGROUPS|DEVTMPFS|OVERLAY_FS|NET_NS|VETH" .config | grep -v "^#" | head -20
 
-      - name: Build kernel
+      - name: Build kernel (vmlinux + modules + dtbs)
         run: |
-          make -j$(nproc --all) Image dtbs 2>&1 | tee build.log
-        env:
-          LOCALVERSION: -droidspaces-v1
+          make -j$(nproc --all) 2>&1 | tee build.log
+          echo "=== Build artifacts ==="
+          ls -lh arch/arm64/boot/ 2>/dev/null || true
+          ls -lh vmlinux 2>/dev/null || true
 
       - name: Package artifacts
         run: |
           mkdir -p output
-          cp arch/arm64/boot/Image output/
-          find arch/arm64/boot/dts/ -name "*.dtb" -exec cp {} output/ \;
-          cp .config output/build.config
+          # Find kernel image
+          if [ -f arch/arm64/boot/Image ]; then
+            cp arch/arm64/boot/Image output/
+          elif [ -f arch/arm64/boot/Image.gz ]; then
+            cp arch/arm64/boot/Image.gz output/
+          elif [ -f arch/arm64/boot/zImage ]; then
+            cp arch/arm64/boot/zImage output/
+          elif [ -f arch/arm64/boot/Image.gz-dtb ]; then
+            cp arch/arm64/boot/Image.gz-dtb output/
+          elif [ -f vmlinux ]; then
+            cp vmlinux output/
+          else
+            echo "=== Searching for kernel image ==="
+            find arch/arm64/boot/ -type f -exec ls -lh {} \;
+            echo "=== Root files ==="
+            ls -lh *.o 2>/dev/null || true
+            ls -lh vmlinux* 2>/dev/null || true
+            exit 1
+          fi
+          # Find DTB files
+          find . -path "*/dts/*" -name "*.dtb" -exec cp {} output/ \; 2>/dev/null || true
+          cp .config output/
           cp build.log output/ 2>/dev/null || true
+          echo "=== Output contents ==="
+          ls -lh output/
           cd output && tar -czf ../begonia-droidspaces-kernel.tar.gz *
 
-      - name: Upload kernel artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: begonia-droidspaces-kernel
           path: begonia-droidspaces-kernel.tar.gz
           retention-days: 90
-
-      - name: Build summary
-        run: |
-          echo "## Build Complete"
-          echo ""
-          echo "Device: Xiaomi Redmi Note 8 Pro (begonia)"
-          echo "Kernel: $KERNEL_VERSION"
-          echo "Defconfig: $DEFCONFIG"
-          echo "Branch: ${{ inputs.branch || 'droidspaces' }}"
-          echo ""
-          echo "### Artifacts"
-          echo "- Image - Kernel image"
-          echo "- *.dtb - Device tree blobs"
-          echo "- build.config - Build configuration"
