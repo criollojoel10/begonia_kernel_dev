@@ -6,26 +6,29 @@ on:
 
 env:
   KERNEL_RUN_ID: "28171150311"
-  GH_PAT: "gho_BwyOfuPtL8Qu5e7bpqCa5cl6n"
+  RECOVERY_RUN_ID: "28147575684"
+  RECOVERY_ARTIFACT_ID: "7869123359"
   KERNEL_REPO: criollojoel10/begonia_kernel_dev
-  RECOVERY_REPO: criollojoel10/begonia-lineage-builder
-  RECOVERY_ARTIFACT_ID: 7869123359
-  EDITOR_REPO: Droidspaces/droidspaces-recovery-hack-example
-
-permissions:
-  contents: read
-  actions: read
+  RECOVERY_OTHER_REPO: criollojoel10/begonia-lineage-builder
+  GH_PAT: "gho_BwyOfuPtL8Qu5e7bpqCa5cl6n"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
-
     steps:
+      # ── Editor (Android_boot_image_editor) ──
       - uses: actions/checkout@v4
         with:
-          repository: ${{ env.EDITOR_REPO }}
+          repository: cfig/Android_boot_image_editor
           path: editor
+          fetch-depth: 1
+
+      # ── Example repo for droidspaces binaries ──
+      - uses: actions/checkout@v4
+        with:
+          repository: Droidspaces/droidspaces-recovery-hack-example
+          path: example
           fetch-depth: 1
 
       - uses: actions/setup-java@v4
@@ -37,42 +40,58 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
-            device-tree-compiler lz4 xz-utils zlib1g-dev python3 p7zip-full unzip
+            device-tree-compiler lz4 xz-utils zlib1g-dev python3 python-is-python3 \
+            p7zip-full unzip jq
 
       - name: "Download kernel artifact (same repo)"
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p ker
-          echo "Downloading kernel run $KERNEL_RUN_ID..."
-          gh run download -R $KERNEL_REPO -n begonia-kernel -D ker $KERNEL_RUN_ID
+          gh run download -R ${{ github.repository }} -n begonia-kernel -D ker $KERNEL_RUN_ID
           ls -lh ker/
 
-      - name: "Download stock recovery (cross-repo via PAT)"
+      - name: "Download stock recovery (cross-repo)"
         run: |
           mkdir -p rec
-          ARTIFACT_URL="https://api.github.com/repos/${RECOVERY_REPO}/actions/artifacts/${RECOVERY_ARTIFACT_ID}/zip"
-          echo "Downloading from: ${ARTIFACT_URL}"
-          TOK="${GH_PAT}"
-          echo "Token length: ${#TOK}"
-          HTTP_CODE=$(curl -sL -o rec/recovery.zip -w "%{http_code}" \
-            -H "Authorization: Bearer ${TOK}" "${ARTIFACT_URL}")
-          echo "HTTP: ${HTTP_CODE}"
-          ls -lh rec/recovery.zip 2>/dev/null || echo "Download failed!"
-          if [ -f rec/recovery.zip ] && [ -s rec/recovery.zip ]; then
-            unzip -o rec/recovery.zip -d rec/ && ls -lh rec/
-            rm -f rec/recovery.zip
-          else
-            echo "Recovery download failed, trying gh run download instead..."
-            GH_TOKEN="${TOK}" gh run download -R "${RECOVERY_REPO}" \
-              -n begonia-stock-recovery -D rec 28147575684 2>&1 || true
-            ls -lh rec/
-          fi
+          curl -sL -o rec/recovery.zip -w "HTTP %{http_code}\n" \
+            -H "Authorization: Bearer $GH_PAT" \
+            "https://api.github.com/repos/$RECOVERY_OTHER_REPO/actions/artifacts/$RECOVERY_ARTIFACT_ID/zip"
+          unzip -o rec/recovery.zip -d rec/ && rm -f rec/recovery.zip
+          ls -lh rec/recovery.img 2>/dev/null || { ls rec/; exit 1; }
 
-      - name: "Backup editor mods"
+      - name: "Unpack stock recovery"
+        working-directory: ./editor
+        run: |
+          rm -f recovery.img *.img
+          cp -v ../rec/recovery.img ./recovery.img
+          ls -lh recovery.img
+          file recovery.img
+          ./gradlew unpack 2>&1 || {
+            echo "Gradle unpack failed, trying direct..."
+            java -jar ../example/bbootimg/bbootimg.jar unpack recovery.img build/unzip_boot/ 2>&1 || true
+          }
+          echo "=== Unpack result ==="
+          ls build/unzip_boot/ 2>/dev/null || echo "No build/unzip_boot/"
+          echo "---"
+          ls build/unzip_boot/root/ 2>/dev/null && echo "root exists" || echo "no root"
+
+      - name: "Check unpack result"
+        run: |
+          ls -la editor/build/unzip_boot/ 2>/dev/null || echo "No unpack dir"
+          echo "---"
+          # Check if root dir exists
+          find editor/build/unzip_boot/ -maxdepth 2 -name "init.rc" -o -name "*.rc" 2>/dev/null | head -10
+          echo "---"
+          # Check kernel from unpack
+          ls -lh editor/build/unzip_boot/kernel 2>/dev/null || echo "No kernel from unpack"
+          echo "---"
+          ls editor/build/unzip_boot/root/system/bin/ 2>/dev/null | head -5 || echo "no system/bin"
+
+      - name: "Backup example repo mods"
         run: |
           mkdir -p /tmp/mods
-          cd editor
+          cd example
           for f in build/unzip_boot/root/system/bin/droidspaces \
             build/unzip_boot/root/system/bin/recovery-console \
             build/unzip_boot/root/system/bin/boot-ubuntu.sh \
@@ -80,58 +99,51 @@ jobs:
             build/unzip_boot/root/system/etc/init/init.ubuntu-droidspaces.example.rc \
             build/unzip_boot/root/system/etc/environment \
             build/unzip_boot/root/system/etc/init/init.recovery.usb.rc; do
-            [ -f "$f" ] && mkdir -p "/tmp/mods/$(dirname "$f")" && cp "$f" "/tmp/mods/$f"
+            [ -f "$f" ] && mkdir -p "/tmp/mods/$(dirname "$f")" && cp "$f" "/tmp/mods/$f" && echo "Saved: $f"
           done
 
-      - name: "Unpack"
-        working-directory: ./editor
+      - name: "Inject DroidSpaces files into unpacked recovery"
+        if: success()
         run: |
-          echo "=== Checking recovery.img ==="
-          rm -f recovery.img
-          cp -v ../rec/recovery.img ./
-          ls -lh recovery.img
-          file recovery.img
-          echo "=== Checking Java/Gradle ==="
-          java -version 2>&1
-          ./gradlew --version 2>&1 | head -5
-          echo "=== Clean + unpack ==="
-          rm -rf build/
-          ./gradlew unpack 2>&1 || echo "Unpack failed with exit code $?"
-          echo "=== Post-unpack ==="
-          ls -la build/unzip_boot/ 2>/dev/null || echo "No build/unzip_boot/ dir"
-
-      - name: "Inject DroidSpaces files"
-        run: |
-          R=editor/build/unzip_boot/root; M=/tmp/mods/build/unzip_boot/root
+          ROOT=editor/build/unzip_boot/root
+          MODS=/tmp/mods/build/unzip_boot/root
+          if [ ! -d "$ROOT" ]; then
+            echo "No root dir - skipping injection"
+            exit 1
+          fi
           for f in droidspaces recovery-console boot-ubuntu.sh selinux-permissive; do
-            [ -f "$M/system/bin/$f" ] && cp -v "$M/system/bin/$f" "$R/system/bin/" && chmod 755 "$R/system/bin/$f" 2>/dev/null || true
+            [ -f "$MODS/system/bin/$f" ] && cp -v "$MODS/system/bin/$f" "$ROOT/system/bin/" && chmod 755 "$ROOT/system/bin/$f" 2>/dev/null || true
           done
-          cp -v "$M/system/etc/environment" "$R/system/etc/" || true
-          mkdir -p "$R/system/etc/init"
-          cp -v "$M/system/etc/init/init.recovery.usb.rc" "$R/system/etc/init/" || true
-          cp -v "$M/system/etc/init/init.ubuntu-droidspaces.example.rc" \
-                "$R/system/etc/init/init.ubuntu-droidspaces.rc" || true
+          cp -v "$MODS/system/etc/environment" "$ROOT/system/etc/" || true
+          mkdir -p "$ROOT/system/etc/init"
+          cp -v "$MODS/system/etc/init/init.recovery.usb.rc" "$ROOT/system/etc/init/" || true
+          cp -v "$MODS/system/etc/init/init.ubuntu-droidspaces.example.rc" "$ROOT/system/etc/init/init.ubuntu-droidspaces.rc" || true
+          echo "Injection done"
+          ls -la "$ROOT/system/bin/droidspaces" "$ROOT/system/bin/recovery-console" 2>/dev/null
 
       - name: "Replace kernel"
+        if: success()
         run: |
-          mkdir -p ko; tar -xzf ker/kernel.tar.gz -C ko/ 2>/dev/null || { echo "No kernel.tar.gz"; ls ker/; exit 1; }
+          mkdir -p ko
+          tar -xzf ker/kernel.tar.gz -C ko/ 2>/dev/null || { echo "No kernel archive"; ls ker/; exit 1; }
           K=editor/build/unzip_boot/kernel
           for img in Image.gz-dtb Image.gz Image; do
-            [ -f "ko/$img" ] && { cp "ko/$img" "$K"; echo "Kernel replaced: $img ($(stat -c%s '$K') bytes)"; break; }
-          done
-          [ -s "$K" ] || { find ko/ -type f | head -10; exit 1; }
+            [ -f "ko/$img" ] && { cp "ko/$img" "$K"; echo "Kernel: $img ($(stat -c%s "$K") bytes)"; break; }
+          done || { find ko/ -type f | head -10; exit 1; }
 
       - name: "Modify ramdisk"
+        if: success()
         run: |
           R=editor/build/unzip_boot/root
           RC=$(find "$R" -name init.rc -path '*/etc/init*' | head -1)
           [ -f "$RC" ] && {
             cp "$RC" "$RC.bak"
-            grep -q 'selinux-permissive' "$RC" || {
+            grep -q selinux-permissive "$RC" || {
               sed -i '/^on init/a\    start selinux-permissive' "$RC"
-              echo -e '\nservice selinux-permissive /system/bin/selinux-permissive\n    class core\n    user root\n    group root\n    oneshot\n    seclabel u:r:recovery:s0' >> "$RC"
+              printf '\nservice selinux-permissive /system/bin/selinux-permissive\n    class core\n    user root\n    group root\n    oneshot\n    seclabel u:r:recovery:s0\n' >> "$RC"
             }
             grep -q '^service recovery ' "$RC" && sed -i '/^service recovery /a\    disabled' "$RC"
+            echo "init.rc done"
           }
           PF=$(find "$R" -name prop.default | head -1)
           [ -f "$PF" ] && {
@@ -141,15 +153,20 @@ jobs:
               k="${kv%%=*}"; v="${kv#*=}"
               grep -q "^${k}=" "$PF" && sed -i "s/^${k}=.*/${k}=${v}/" "$PF" || echo "$kv" >> "$PF"
             done
+            echo "prop.default done"
           }
 
       - name: "Repack"
         working-directory: ./editor
+        if: success()
         run: |
           rm -f recovery.img.signed recovery.img.clear recovery.img.google
-          ./gradlew pack 2>&1
+          ./gradlew pack 2>&1 || {
+            echo "Gradle pack failed, trying bbootimg..."
+            java -jar ../example/bbootimg/bbootimg.jar pack build/unzip_boot/ recovery.img.signed 2>&1 || true
+          }
           [ -f recovery.img.signed ] && ls -lh recovery.img.signed || {
-            [ -f recovery.img.clear ] && { cp recovery.img.clear recovery.img.signed; ls -lh recovery.img.signed; } || echo "No output image!"
+            [ -f recovery.img.clear ] && { cp recovery.img.clear recovery.img.signed; ls -lh recovery.img.signed; } || echo "No output"
           }
 
       - uses: actions/upload-artifact@v4
