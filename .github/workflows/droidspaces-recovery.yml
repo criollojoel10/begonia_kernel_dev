@@ -86,8 +86,19 @@ jobs:
       - name: "Unpack"
         working-directory: ./editor
         run: |
-          rm -f recovery.img; cp ../rec/recovery.img .; ls -lh recovery.img
-          ./gradlew unpack 2>&1
+          echo "=== Checking recovery.img ==="
+          rm -f recovery.img
+          cp -v ../rec/recovery.img ./
+          ls -lh recovery.img
+          file recovery.img
+          echo "=== Checking Java/Gradle ==="
+          java -version 2>&1
+          ./gradlew --version 2>&1 | head -5
+          echo "=== Clean + unpack ==="
+          rm -rf build/
+          ./gradlew unpack 2>&1 || echo "Unpack failed with exit code $?"
+          echo "=== Post-unpack ==="
+          ls -la build/unzip_boot/ 2>/dev/null || echo "No build/unzip_boot/ dir"
 
       - name: "Inject DroidSpaces files"
         run: |
