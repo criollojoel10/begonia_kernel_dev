@@ -4,6 +4,10 @@ on:
   push:
     branches: [ "droidspaces-recovery" ]
 
+permissions:
+  actions: write
+  contents: read
+
 jobs:
   trigger:
     runs-on: ubuntu-22.04
@@ -17,6 +21,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "Dispatching droidspaces-recovery.yml..."
           gh workflow run droidspaces-recovery.yml \
             -R ${{ github.repository }} \
-            --ref ${{ github.ref_name }}
+            --ref ${{ github.ref_name }} \
+            -f kernel_run_id=28171150311 \
+            -f stock_recovery_run_id=28147575684
