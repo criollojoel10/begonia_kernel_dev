@@ -62,14 +62,65 @@ jobs:
         uses: actions/cache@v4
         with:
           path: clang
-          key: aosp-clang-r547379-ubuntu-2204-v2
+          key: aosp-clang-r547379-ubuntu-2204-v3
 
       - name: "Download Clang"
         if: steps.cache-clang.outputs.cache-hit != 'true'
         run: |
+          set -e
           mkdir -p clang
-          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r547379.tar.gz -O clang.tar.gz
-          tar -xf clang.tar.gz -C clang
+          ARCHIVE="clang-${CLANG_VERSION}.tar.gz"
+
+          download_clang() {
+            local url="$1"
+            echo "→ Intentando: $url"
+            curl -fSL --retry 5 --retry-delay 10 --connect-timeout 30 \
+              "$url" -o "$ARCHIVE" 2>&1
+            local rc=$?
+            if [ $rc -ne 0 ]; then
+              echo "✗ Falló curl (exit=$rc)"
+              return $rc
+            fi
+            local size=$(stat -c%s "$ARCHIVE" 2>/dev/null || echo 0)
+            echo "  Descargado: $size bytes"
+            if [ "$size" -lt 1000000 ]; then
+              echo "  Archivo muy pequeño ($size bytes), posible error"
+              return 1
+            fi
+            # Validar que sea gzip válido
+            if ! gzip -t "$ARCHIVE" 2>/dev/null; then
+              echo "  ✗ No es un gzip válido"
+              file "$ARCHIVE"
+              head -c 200 "$ARCHIVE" | cat -v
+              return 1
+            fi
+            echo "  ✓ gzip válido"
+            return 0
+          }
+
+          # Primary: AOSP Gitiles
+          if download_clang "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/${CLANG_VERSION}.tar.gz"; then
+            echo "✓ Descarga primaria OK"
+          else
+            sleep 5
+            # Secondary: GitHub mirror (nibblejr/azure-clang)
+            echo "→ Usando mirror alternativo..."
+            if download_clang "https://github.com/nibblejr/azure-clang/releases/download/${CLANG_VERSION}/${CLANG_VERSION}.tar.gz"; then
+              echo "✓ Mirror OK"
+            else
+              sleep 5
+              # Tertiary: raw GitHub AOSP mirror
+              echo "→ Usando mirror 2..."
+              download_clang "https://raw.githubusercontent.com/nibblejr/azure-clang/main/${CLANG_VERSION}.tar.gz" || {
+                echo "✗ Todas las fuentes fallaron"
+                exit 1
+              }
+            fi
+          fi
+
+          tar -xf "$ARCHIVE" -C clang
+          rm -f "$ARCHIVE"
+          echo "=== Clang version ==="
           clang/bin/clang --version | head -2
 
       - name: "Configure kernel with DroidSpaces fragment"
