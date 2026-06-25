@@ -4,28 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       defconfig:
-        description: 'Defconfig target'
+        description: 'Defconfig'
         required: false
         default: 'begonia_user_defconfig'
       branch:
-        description: 'Branch to build'
+        description: 'Branch'
         required: false
         default: 'droidspaces'
 
-env:
-  DEFCONFIG: begonia_user_defconfig
-  ARCH: arm64
-  CROSS_COMPILE: aarch64-linux-gnu-
-  CC: gcc
-
 jobs:
-  build-kernel:
-    name: Build kernel for begonia
+  build:
     runs-on: ubuntu-22.04
-    
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.branch || 'droidspaces' }}
           fetch-depth: 1
@@ -35,55 +26,41 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             libc6-dev-arm64-cross device-tree-compiler lz4 xz-utils zstd cpio \
-            bc bison flex libssl-dev python3 --no-install-recommends
-          sudo apt-get clean
+            bc bison flex libssl-dev --no-install-recommends
 
-      - name: Configure kernel
+      - name: Configure
         run: |
-          make $DEFCONFIG
-          echo "=== DroidSpaces config check ==="
-          grep -E "TMPFS_POSIX_ACL|TMPFS_XATTR|NAMESPACES|PID_NS|SECCOMP|CGROUPS|DEVTMPFS|OVERLAY_FS|NET_NS|VETH" .config | grep -v "^#" | head -20
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- ${{ inputs.defconfig || 'begonia_user_defconfig' }}
+          grep -E "TMPFS_POSIX_ACL|TMPFS_XATTR|NAMESPACES|PID_NS|SECCOMP|CGROUPS|NET_NS|VETH" .config | grep -v "^#" | head -20
 
-      - name: Build kernel (vmlinux + modules + dtbs)
+      - name: Build
         run: |
-          make -j$(nproc --all) 2>&1 | tee build.log
-          echo "=== Build artifacts ==="
-          ls -lh arch/arm64/boot/ 2>/dev/null || true
-          ls -lh vmlinux 2>/dev/null || true
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc --all) all 2>&1 | tee build.log
+          echo "=== Produced files ==="
+          ls -lh arch/arm64/boot/Image* arch/arm64/boot/zImage* vmlinux 2>/dev/null || echo "(checking...)"
+          find . -name "*.dtb" -not -path "./.git/*" | head -10
 
-      - name: Package artifacts
+      - name: Package
         run: |
           mkdir -p output
-          # Find kernel image
-          if [ -f arch/arm64/boot/Image ]; then
-            cp arch/arm64/boot/Image output/
-          elif [ -f arch/arm64/boot/Image.gz ]; then
-            cp arch/arm64/boot/Image.gz output/
-          elif [ -f arch/arm64/boot/zImage ]; then
-            cp arch/arm64/boot/zImage output/
-          elif [ -f arch/arm64/boot/Image.gz-dtb ]; then
-            cp arch/arm64/boot/Image.gz-dtb output/
-          elif [ -f vmlinux ]; then
-            cp vmlinux output/
-          else
-            echo "=== Searching for kernel image ==="
-            find arch/arm64/boot/ -type f -exec ls -lh {} \;
-            echo "=== Root files ==="
-            ls -lh *.o 2>/dev/null || true
-            ls -lh vmlinux* 2>/dev/null || true
-            exit 1
-          fi
-          # Find DTB files
-          find . -path "*/dts/*" -name "*.dtb" -exec cp {} output/ \; 2>/dev/null || true
-          cp .config output/
+          # Find kernel - MTK arm64 default is Image.gz
+          for f in arch/arm64/boot/Image.gz-dtb arch/arm64/boot/Image.gz \
+                    arch/arm64/boot/Image arch/arm64/boot/zImage vmlinux; do
+            if [ -f "$f" ]; then
+              cp "$f" output/
+              echo "Kernel: $f ($(ls -lh $f | awk '{print $5}'))"
+              break
+            fi
+          done
+          # DTBs
+          find . -name "*.dtb" -not -path "./.git/*" -exec cp {} output/ \;
+          cp .config output/ 2>/dev/null || true
           cp build.log output/ 2>/dev/null || true
-          echo "=== Output contents ==="
           ls -lh output/
-          cd output && tar -czf ../begonia-droidspaces-kernel.tar.gz *
+          cd output && tar -czf ../kernel.tar.gz *
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: begonia-droidspaces-kernel
-          path: begonia-droidspaces-kernel.tar.gz
+          path: kernel.tar.gz
           retention-days: 90
